@@ -161,9 +161,46 @@ int main()
 					photoView = window.getDefaultView();
 				}
 
-				if (keyPressed->code == sf::Keyboard::Key::Space)
+				if (keyPressed->code == sf::Keyboard::Key::Space && canvasSprite.has_value())
 				{
-					//
+					int width = photoTexture.getSize().x;
+					int height = photoTexture.getSize().y;
+					int outWidth = 0;
+					int outHeight = 0;
+
+					//Get image from GPU to RAM
+					sf::Image imgData = photoCanvas.getTexture().copyToImage();
+					const uint8_t* inputImageArray = imgData.getPixelsPtr();
+					std::vector<uint8_t> outputImageArray;
+
+					float inputPoints[8];
+					for (int i = 0; i < 4; i++)
+					{
+						inputPoints[i * 2] = cropPoints[i].x;
+						inputPoints[i * 2 + 1] = cropPoints[i].y;
+					}
+
+					warpImage(inputImageArray, outputImageArray, inputPoints, width, height, outWidth, outHeight);
+
+					sf::Image newImage(sf::Vector2u(outWidth, outHeight), outputImageArray.data());
+
+					photoTexture.loadFromImage(newImage);
+
+					photoCanvas.resize(photoTexture.getSize());
+					photoCanvas.clear(sf::Color::Transparent);
+
+					sf::Sprite newRawSprite(photoTexture);
+					photoCanvas.draw(newRawSprite);
+					photoCanvas.display();
+
+					canvasSprite.emplace(photoCanvas.getTexture());
+
+					cropPoints[0] = { 0.f, 0.f };
+					cropPoints[1] = { (float)outWidth, 0.f };
+					cropPoints[2] = { (float)outWidth, (float)outHeight };
+					cropPoints[3] = { 0.f, (float)outHeight };
+
+					photoView = window.getDefaultView();
 				}
 			}
 
@@ -262,19 +299,11 @@ int main()
 			{
 				if (isPanning)
 				{
-					// A. Convert the old and new mouse positions into the Camera's world coordinates
 					sf::Vector2f oldPos = window.mapPixelToCoords(oldMousePos, photoView);
 					sf::Vector2f newPos = window.mapPixelToCoords(mouseMove->position, photoView);
 
-					// B. Calculate how much the mouse moved in the world
-					// We do (old - new) instead of (new - old) because moving the mouse RIGHT 
-					// means you are dragging the picture RIGHT, which means the CAMERA must move LEFT.
 					sf::Vector2f delta = oldPos - newPos;
-
-					// C. Move the camera
 					photoView.move(delta);
-
-					// D. Update the old mouse position for the next frame!
 					oldMousePos = mouseMove->position;
 				}
 
@@ -286,12 +315,10 @@ int main()
 			}
 		}
 
-		// 1. Geçen zamaný al (Delta Time - dt)
 		float dt = deltaClock.restart().asSeconds();
 
 		if (dt > 0.1f) dt = 0.1f;
 
-		// 2. Hedeflerimizi baþtan "Normal" olarak belirleyelim
 		float targetShrink = 0.f;
 		sf::Color targetColor = colorNormal;
 		sf::Vector2f targetTextOffset = { 0.f, 0.f };
@@ -307,13 +334,13 @@ int main()
 				//targetTextOffset = { 1.5f, 1.5f };
 			}
 			else {
-				targetColor = colorHover; // Üzerindeyken parlak mavi
-				targetShrink = 1.f; // Hover olunca çok hafif küçülsün (tatlý bir hissiyat verir)
+				targetColor = colorHover;
+				targetShrink = 1.f; 
 			}
 		}
 
 		// 4. ANÝMASYONU UYGULA (Mevcut deðerleri hedeflere doðru kaydýr)
-		float animSpeed = 15.f * dt; // Hýz (Sayayý artýrýrsan animasyon hýzlanýr)
+		float animSpeed = 15.f * dt;
 
 		currentShrink = lerp(currentShrink, targetShrink, animSpeed);
 		currentColor = lerpColor(currentColor, targetColor, animSpeed);

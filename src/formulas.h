@@ -2,7 +2,7 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
-using uchar = unsigned char;
+using uchar = uint8_t;
 
 float findDistance(float x0, float y0, float x1, float y1)
 {
@@ -19,17 +19,14 @@ void inverseMatrix3x3(float* H)
 
     std::vector<float> H_inv(9, 0);
 
-    // Row 1
     H_inv[0] = (H[4] * H[8] - H[5] * H[7]) * invDet;
     H_inv[1] = (H[2] * H[7] - H[1] * H[8]) * invDet;
     H_inv[2] = (H[1] * H[5] - H[2] * H[4]) * invDet;
 
-    // Row 2
     H_inv[3] = (H[5] * H[6] - H[3] * H[8]) * invDet;
     H_inv[4] = (H[0] * H[8] - H[2] * H[6]) * invDet;
     H_inv[5] = (H[2] * H[3] - H[0] * H[5]) * invDet;
 
-    // Row 3
     H_inv[6] = (H[3] * H[7] - H[4] * H[6]) * invDet;
     H_inv[7] = (H[1] * H[6] - H[0] * H[7]) * invDet;
     H_inv[8] = (H[0] * H[4] - H[1] * H[3]) * invDet;
@@ -37,13 +34,6 @@ void inverseMatrix3x3(float* H)
     float epsilon = 1e-4;
     for (int i = 0; i < 9; i++)
     {
-        if (abs(H_inv[i]) < epsilon) {
-            H_inv[i] = 0.0f;
-        }
-        if (abs(H_inv[i] - round(H_inv[i])) < epsilon) {
-            H_inv[i] = round(H_inv[i]);
-        }
-
         H[i] = H_inv[i];
     }
 
@@ -273,7 +263,7 @@ void computeSVD(float* A, float* A9x9, float* u, float* v)
     QR(A9x9, 9, 9, v);
 }
 
-void computeHomography(float* H, std::vector<float> src, std::vector<float> dst)
+void computeHomography(float* H, const float* src, const float* dst)
 {
     float A[9 * 8] = { 0 };//Decide if we really need A
     float A9x9[81] = { 0 };
@@ -310,7 +300,6 @@ void computeHomography(float* H, std::vector<float> src, std::vector<float> dst)
         if ((abs(A9x9[i * 10]) < abs(A9x9[smallestIndex * 10])))
             smallestIndex = i;
     }
-    std::cout << smallestIndex << std::endl;
 
     for (int i = 0; i < 9; i++)
         H[i] = v[smallestIndex * 9 + i];
@@ -319,7 +308,7 @@ void computeHomography(float* H, std::vector<float> src, std::vector<float> dst)
 
 void getPixelColor(const uchar* inputImage, int x, int y, int width, uchar color[3])
 {
-    int index = (y * width + x) * 3;
+    int index = (y * width + x) * 4;
     for (int i = 0; i < 3; i++)
         color[i] = inputImage[index + i];
 }
@@ -345,26 +334,23 @@ void mapImage(const uchar* inputImage, std::vector<uchar>& outputImage, int inpu
             float x_src = u / w;
             float y_src = v / w;
 
-            int dest_idx = (y_dest * destWidth + x_dest) * 3;
+            int dest_idx = (y_dest * destWidth + x_dest) * 4;
 
             if (x_src < 0 || x_src >= inputWidth - 1 || y_src < 0 || y_src >= inputHeight - 1)
             {
-                for (int k = 0; k < 3; k++)
+                for (int k = 0; k < 4; k++)
                     outputImage[dest_idx + k] = 0;
                 continue;
             }
 
-            int x_floor = (int)x_src;      // Integer part (left)
-            int y_floor = (int)y_src;      // Integer part (top)
-            int x_ceil = x_floor + 1;      // Right neighbor
-            int y_ceil = y_floor + 1;      // Bottom neighbor
+            int x_floor = (int)x_src;      
+            int y_floor = (int)y_src;      
+            int x_ceil = x_floor + 1;      
+            int y_ceil = y_floor + 1;      
 
             float x_weight = x_src - x_floor;
             float y_weight = y_src - y_floor;
 
-            //Get the colors of the 4 neighbors
-            //i can change these to normal array, idk if it makes any difference tho
-            //it definitely did
             getPixelColor(inputImage, x_floor, y_floor, inputWidth, tl); 
             getPixelColor(inputImage, x_ceil, y_floor, inputWidth, tr); 
             getPixelColor(inputImage, x_floor, y_ceil, inputWidth, bl); 
@@ -380,6 +366,48 @@ void mapImage(const uchar* inputImage, std::vector<uchar>& outputImage, int inpu
 
                 outputImage[dest_idx + k] = finalColor;
             }
+            outputImage[dest_idx + 3] = 255;//channel A
+            continue;
         }
     }
+}
+
+void warpImage(const uchar* inputImage, std::vector<uchar>& outputImage, float* inputPoints, int inputWidth, int inputHeight, int& outWidth, int& outHeight)
+{
+    outWidth = (int)round(std::max(sqrt(pow(inputPoints[0] - inputPoints[2], 2) + pow(inputPoints[1] - inputPoints[3], 2)),
+                sqrt(pow(inputPoints[4] - inputPoints[6], 2) + pow(inputPoints[5] - inputPoints[7], 2))));
+    outHeight = (int)round(std::max(sqrt(pow(inputPoints[0] - inputPoints[6], 2) + pow(inputPoints[1] - inputPoints[7], 2)),
+                sqrt(pow(inputPoints[2] - inputPoints[4], 2) + pow(inputPoints[3] - inputPoints[5], 2))));
+
+    float H[9] = { 0 };
+    float outputPoints[8] = {0, 0, (float)outWidth, 0, (float)outWidth, (float)outHeight, 0, (float)outHeight};
+
+    float scale = std::max(inputWidth, inputHeight);
+    for (int i = 0; i < 8; i++)
+    {
+        inputPoints[i] /= scale;
+        outputPoints[i] /= scale;
+    }
+
+    computeHomography(H, inputPoints, outputPoints);
+
+    //scale it back so you can use it in mapping
+    for (int i = 0; i < 8; i++)
+    {
+        outputPoints[i] *= scale;
+        inputPoints[i] *= scale;
+    }
+
+    for (int i = 0; i < 2; i++)
+        H[i * 3 + 2] *= scale;
+    for (int i = 0; i < 2; i++)
+        H[6 + i] /= scale;
+    for (int i = 0; i < 9; i++)//normalization
+        H[i] /= H[8];
+
+    inverseMatrix3x3(H);
+
+    outputImage.resize(outWidth * outHeight * 4);
+
+    mapImage(inputImage, outputImage, inputWidth, inputHeight, outWidth, outHeight, H);
 }
