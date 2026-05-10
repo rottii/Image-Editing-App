@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <thread>
 using uchar = uint8_t;
 
 float findDistance(float x0, float y0, float x1, float y1)
@@ -306,69 +307,85 @@ void computeHomography(float* H, const float* src, const float* dst)
 
 }
 
-void getPixelColor(const uchar* inputImage, int x, int y, int width, uchar color[3])
-{
-    int index = (y * width + x) * 4;
-    for (int i = 0; i < 3; i++)
-        color[i] = inputImage[index + i];
-}
-
 void mapImage(const uchar* inputImage, std::vector<uchar>& outputImage, int inputWidth, int inputHeight, int destWidth, int destHeight, float* H)//H = H^-1
 {
-    uchar tl[3], tr[3], bl[3], br[3];
-    float topMix, bottomMix, finalColor;
+    unsigned int numThreads = std::thread::hardware_concurrency();
+    if (numThreads == 0) numThreads = 4;
 
-    for (int y_dest = 0; y_dest < destHeight; y_dest++)
-    {
-        //we precalculate these for optimization
-        float h_u_y = H[1] * y_dest + H[2];
-        float h_v_y = H[4] * y_dest + H[5];
-        float h_w_y = H[7] * y_dest + H[8];
+    int rowsPerThread = destHeight / numThreads;
+    std::vector<std::thread> threads;
 
-        for (int x_dest = 0; x_dest < destWidth; x_dest++)
+    auto worker = [&](int startY, int endY)
         {
-            float u = H[0] * x_dest + h_u_y;
-            float v = H[3] * x_dest + h_v_y;
-            float w = H[6] * x_dest + h_w_y;
+            float topMix, bottomMix, finalColor;
 
-            float x_src = u / w;
-            float y_src = v / w;
-
-            int dest_idx = (y_dest * destWidth + x_dest) * 4;
-
-            if (x_src < 0 || x_src >= inputWidth - 1 || y_src < 0 || y_src >= inputHeight - 1)
+            for (int y_dest = 0; y_dest < destHeight; y_dest++)
             {
-                for (int k = 0; k < 4; k++)
-                    outputImage[dest_idx + k] = 0;
-                continue;
+                //we precalculate these for optimization
+                float h_u_y = H[1] * y_dest + H[2];
+                float h_v_y = H[4] * y_dest + H[5];
+                float h_w_y = H[7] * y_dest + H[8];
+
+                for (int x_dest = 0; x_dest < destWidth; x_dest++)
+                {
+                    float u = H[0] * x_dest + h_u_y;
+                    float v = H[3] * x_dest + h_v_y;
+                    float w = H[6] * x_dest + h_w_y;
+
+                    float x_src = u / w;
+                    float y_src = v / w;
+
+                    int dest_idx = (y_dest * destWidth + x_dest) * 4;
+
+                    if (x_src < -1.0f || x_src >= inputWidth || y_src < -1.0f || y_src >= inputHeight)
+                    {
+                        for (int k = 0; k < 4; k++)
+                            outputImage[dest_idx + k] = 0;
+                        continue;
+                    }
+
+                    x_src = std::max(0.0f, std::min(x_src, (float)inputWidth - 1.001f));
+                    y_src = std::max(0.0f, std::min(y_src, (float)inputHeight - 1.001f));
+
+                    int x_floor = (int)x_src;
+                    int y_floor = (int)y_src;
+                    int x_ceil = x_floor + 1;
+                    int y_ceil = y_floor + 1;
+
+                    float x_weight = x_src - x_floor;
+                    float y_weight = y_src - y_floor;
+
+                    int idx_tl = (y_floor * inputWidth + x_floor) * 4;
+                    int idx_tr = (y_floor * inputWidth + x_ceil) * 4;
+                    int idx_bl = (y_ceil * inputWidth + x_floor) * 4;
+                    int idx_br = (y_ceil * inputWidth + x_ceil) * 4;
+
+                    // Interpolate Top pair and Bottom pair and get the final color
+                    for (int k = 0; k < 3; k++)
+                    {
+                        topMix = inputImage[idx_tl + k] * (1.0f - x_weight) + inputImage[idx_tr + k] * x_weight;
+                        bottomMix = inputImage[idx_bl + k] * (1.0f - x_weight) + inputImage[idx_br + k] * x_weight;
+
+                        finalColor = topMix * (1.0f - y_weight) + bottomMix * y_weight;
+
+                        outputImage[dest_idx + k] = (uchar)finalColor;
+                    }
+                    outputImage[dest_idx + 3] = 255;//channel A
+                }
             }
+        };
 
-            int x_floor = (int)x_src;      
-            int y_floor = (int)y_src;      
-            int x_ceil = x_floor + 1;      
-            int y_ceil = y_floor + 1;      
+    for (unsigned int i = 0; i < numThreads; i++)
+    {
+        int startY = i * rowsPerThread;
 
-            float x_weight = x_src - x_floor;
-            float y_weight = y_src - y_floor;
+        int endY = (i == numThreads - 1) ? destHeight : startY + rowsPerThread;
+        threads.push_back(std::thread(worker, startY, endY));
+    }
 
-            getPixelColor(inputImage, x_floor, y_floor, inputWidth, tl); 
-            getPixelColor(inputImage, x_ceil, y_floor, inputWidth, tr); 
-            getPixelColor(inputImage, x_floor, y_ceil, inputWidth, bl); 
-            getPixelColor(inputImage, x_ceil, y_ceil, inputWidth, br); 
-
-            // Interpolate Top pair and Bottom pair and get the final color
-            for (int k = 0; k < 3; k++)
-            {
-                topMix = tl[k] * (1.0f - x_weight) + tr[k] * x_weight;
-                bottomMix = bl[k] * (1.0f - x_weight) + br[k] * x_weight;
-
-                finalColor = topMix * (1.0f - y_weight) + bottomMix * y_weight;
-
-                outputImage[dest_idx + k] = finalColor;
-            }
-            outputImage[dest_idx + 3] = 255;//channel A
-            continue;
-        }
+    for (auto& t : threads)
+    {
+        t.join();
     }
 }
 
@@ -383,19 +400,20 @@ void warpImage(const uchar* inputImage, std::vector<uchar>& outputImage, float* 
     float outputPoints[8] = {0, 0, (float)outWidth, 0, (float)outWidth, (float)outHeight, 0, (float)outHeight};
 
     float scale = std::max(inputWidth, inputHeight);
+
+    float localInput[8];
     for (int i = 0; i < 8; i++)
     {
-        inputPoints[i] /= scale;
+        localInput[i] = inputPoints[i] / scale;
         outputPoints[i] /= scale;
     }
 
-    computeHomography(H, inputPoints, outputPoints);
+    computeHomography(H, localInput, outputPoints);
 
     //scale it back so you can use it in mapping
     for (int i = 0; i < 8; i++)
     {
         outputPoints[i] *= scale;
-        inputPoints[i] *= scale;
     }
 
     for (int i = 0; i < 2; i++)
@@ -410,4 +428,129 @@ void warpImage(const uchar* inputImage, std::vector<uchar>& outputImage, float* 
     outputImage.resize(outWidth * outHeight * 4);
 
     mapImage(inputImage, outputImage, inputWidth, inputHeight, outWidth, outHeight, H);
+}
+
+void findCorners( const uchar* inputImage, std::vector<uchar>& outputImage, int inputWidth, int inputHeight)
+{
+    //bunu ekle
+    double window[9] = {
+     1.0 / 16.0, 2.0 / 16.0, 1.0 / 16.0 ,
+     2.0 / 16.0, 4.0 / 16.0, 2.0 / 16.0 ,
+     1.0 / 16.0, 2.0 / 16.0, 1.0 / 16.0  };
+
+    int sobelX[9] = { -1, 0, 1, -2, 0, 2, -1, 0, 1 };
+    int sobelY[9] = { -1, -2, -1, 0, 0, 0, 1, 2, 1 };
+
+    std::vector<int> Ix((inputHeight - 2) * (inputWidth - 2), 0);
+    std::vector<int> Iy((inputHeight - 2) * (inputWidth - 2), 0);
+
+    int gx, gy;
+
+    for (int i = 0; i < inputHeight - 2; i++)
+    {
+        for (int j = 0; j < inputWidth - 2; j++)
+        {
+            gx = 0;
+            gy = 0;
+            for (int k = 0; k < 3; k++)
+            {
+                for (int l = 0; l < 3; l++)
+                {
+                    int idx = ((k + i) * inputWidth + l + j) * 4;
+
+                    int gray = (inputImage[idx] + inputImage[idx + 1] + inputImage[idx + 2]) / 3;
+
+                    gx += gray * sobelY[k * 3 + l];
+                    gy += gray * sobelX[k * 3 + l];
+                }
+            }
+
+            Ix[i * (inputWidth - 2) + j] = gx;
+            Iy[i * (inputWidth - 2) + j] = gy;
+        }
+    }
+
+    outputImage.resize((inputHeight - 2) * (inputWidth - 2) * 4);
+
+    double maxR = 0;
+    std::vector<double> R((inputHeight - 2) * (inputWidth - 2), 0.0);
+
+    for (int i = 1; i < inputHeight - 3; i++)
+    {
+        for (int j = 1; j < inputWidth - 3; j++)
+        {
+            double m[3] = { 0 };
+
+            for (int k = -1; k <= 1; k++)
+            {
+                for (int l = -1; l <= 1; l++)
+                {
+                    int idx = (k + i) * (inputWidth - 2) + l + j;
+
+                    m[0] +=  Ix[idx] * Ix[idx];
+                    m[1] += Ix[idx] * Iy[idx]; //sað üst ve sol alt
+                    m[2] += Iy[idx] * Iy[idx];
+                }
+            }
+
+            double r = ((m[0] + m[2]) - std::sqrt((m[0] - m[2]) * (m[0] - m[2]) + 4.0 * m[1] * m[1])) / 2.0;
+
+            R[i * (inputWidth - 2) + j] = r;
+            if (r > maxR) maxR = r;
+        }
+    }
+
+    //Non maxima suppression yapýp köþeleri gösterme
+    for (int i = 1; i < inputHeight - 3; i++)
+    {
+        for (int j = 1; j < inputWidth - 3; j++)
+        {
+            int idx = i * (inputWidth - 2) + j;
+            double r = R[i * (inputWidth - 2) + j];
+
+            if (R[idx] <= 0 || R[idx] < (maxR * 0.05))
+            {
+                outputImage[idx * 4] = 0;
+                outputImage[idx * 4 + 1] = 0;
+                outputImage[idx * 4 + 2] = 0;
+                outputImage[idx * 4 + 3] = 255;
+                continue;
+            }
+
+            bool isLocalMax = true;
+
+            for (int k = -1; k <= 1; k++)
+            {
+                for (int l = -1; l <= 1; l++)
+                {
+                    if (k == 0 && l == 0) continue;
+
+                    int neighborIdx = (i + k) * (inputWidth - 2) + (j + l);
+
+                    if (R[idx] <= R[neighborIdx])
+                    {
+                        isLocalMax = false;
+                        break; 
+                    }
+                }
+                if (!isLocalMax) break;
+            }
+
+            if (isLocalMax)
+            {
+                uchar color = (uchar)((R[idx] / maxR) * 255.0);
+                outputImage[idx * 4] = color;
+                outputImage[idx * 4 + 1] = color;
+                outputImage[idx * 4 + 2] = color;
+                outputImage[idx * 4 + 3] = 255;
+            }
+            else
+            {
+                outputImage[idx * 4] = 0;
+                outputImage[idx * 4 + 1] = 0;
+                outputImage[idx * 4 + 2] = 0;
+                outputImage[idx * 4 + 3] = 255;
+            }
+        }
+    }
 }

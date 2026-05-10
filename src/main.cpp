@@ -174,6 +174,7 @@ int main()
 	bool isPanning = false;
 	sf::Vector2i oldMousePos; // Remembers where the mouse was exactly 1 frame ago
 
+	//Normal fonksiyona sürekli parametre girmek gerekiyor diye bunu kullanýyoruz
 	auto applyWarp = [&]()
 		{
 			int width = photoTexture.getSize().x;
@@ -230,6 +231,8 @@ int main()
 		{
 			if (event->is<sf::Event::Closed>())
 				window.close();
+
+			// KEY PRESS EVENT 
 			if (const auto* keyPressed = event->getIf<sf::Event::KeyPressed>())
 			{
 				if (keyPressed->code == sf::Keyboard::Key::Escape)
@@ -251,9 +254,43 @@ int main()
 				{
 					applyWarp();
 				}
+
+				if (keyPressed->code == sf::Keyboard::Key::Enter && canvasSprite.has_value())
+				{
+					int width = photoTexture.getSize().x;
+					int height = photoTexture.getSize().y;
+
+					sf::Image imgData = photoCanvas.getTexture().copyToImage();
+					const uint8_t* inputImageArray = imgData.getPixelsPtr();
+					std::vector<uint8_t> outputImageArray;
+
+					findCorners(inputImageArray, outputImageArray, width, height);
+
+					sf::Image newImage(sf::Vector2u(width - 2, height - 2), outputImageArray.data());
+
+					photoTexture.loadFromImage(newImage);
+
+					photoCanvas.resize(photoTexture.getSize());
+					photoCanvas.clear(sf::Color::Transparent);
+
+					sf::Sprite newRawSprite(photoTexture);
+					photoCanvas.draw(newRawSprite);
+					photoCanvas.display();
+
+					canvasSprite.emplace(photoCanvas.getTexture());
+
+					//Center the image on the window
+					sf::Vector2f winSize(window.getSize().x, window.getSize().y);
+					sf::Vector2f imgSize(photoTexture.getSize().x, photoTexture.getSize().y);
+
+					photoView.setCenter({ imgSize.x / 2.f, imgSize.y / 2.f });
+
+					float zoomFactor = std::max(imgSize.x / winSize.x, imgSize.y / winSize.y);
+					photoView.setSize(winSize* zoomFactor);
+				}
 			}
 
-			// MOUSE SCROLL EVENT (ZOOM)
+			// MOUSE SCROLL EVENT 
 			if (const auto* scroll = event->getIf<sf::Event::MouseWheelScrolled>())
 			{
 				if (scroll->wheel == sf::Mouse::Wheel::Vertical)
@@ -276,6 +313,7 @@ int main()
 				}
 			}
 
+			// MOUSE PRESS EVENT 
 			if (const auto* mouseClick = event->getIf<sf::Event::MouseButtonPressed>())
 			{
 				if (mouseClick->button == sf::Mouse::Button::Middle)
@@ -304,6 +342,7 @@ int main()
 				}
 			}
 
+			// MOUSE RELEASE EVENT 
 			if (const auto* mouseRelease = event->getIf<sf::Event::MouseButtonReleased>())
 			{
 
@@ -382,6 +421,7 @@ int main()
 				}
 			}
 
+			// MOUSE MOVE EVENT 
 			if (const auto* mouseMove = event->getIf<sf::Event::MouseMoved>())
 			{
 				if (isPanning)
