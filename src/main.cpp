@@ -177,6 +177,30 @@ int main()
 	//Normal fonksiyona sürekli parametre girmek gerekiyor diye bunu kullanýyoruz
 	auto applyWarp = [&]()
 		{
+			// ==========================================
+			// 1. Sort points to Top-Left, Top-Right, Bottom-Right, Bottom-Left
+			// ==========================================
+			double centerX = 0.0;
+			double centerY = 0.0;
+
+			for (int i = 0; i < 4; i++) {
+				centerX += cropPoints[i].x;
+				centerY += cropPoints[i].y;
+			}
+			centerX /= 4.0;
+			centerY /= 4.0;
+
+			// Note: Using &cropPoints[0] to &cropPoints[4] makes this safe 
+			// whether cropPoints is a raw array (e.g., sf::Vector2f cropPoints[4]) 
+			// or a std::vector.
+			std::sort(&cropPoints[0], &cropPoints[4],
+				[centerX, centerY](const auto& a, const auto& b) {
+					double angleA = std::atan2(a.y - centerY, a.x - centerX);
+					double angleB = std::atan2(b.y - centerY, b.x - centerX);
+					return angleA < angleB;
+				});
+			// ==========================================
+
 			int width = photoTexture.getSize().x;
 			int height = photoTexture.getSize().y;
 			int outWidth = 0;
@@ -238,6 +262,18 @@ int main()
 				if (keyPressed->code == sf::Keyboard::Key::Escape)
 					window.close();
 
+				if (keyPressed->code == sf::Keyboard::Key::Left && canvasSprite.has_value())
+				{
+					photoView.rotate(sf::degrees(90.f));
+					draggedPointIndex = -1;
+				}
+
+				if (keyPressed->code == sf::Keyboard::Key::Right && canvasSprite.has_value())
+				{
+					photoView.rotate(sf::degrees(-90.f));
+					draggedPointIndex = -1;
+				}
+
 				if (keyPressed->code == sf::Keyboard::Key::F)
 				{
 					//Center the image on the window
@@ -264,11 +300,11 @@ int main()
 					const uint8_t* inputImageArray = imgData.getPixelsPtr();
 					std::vector<uint8_t> outputImageArray;
 
-					findCorners(inputImageArray, outputImageArray, width, height);
+					findSomething(inputImageArray, outputImageArray, width, height, cropPoints);
 
-					sf::Image newImage(sf::Vector2u(width - 2, height - 2), outputImageArray.data());
+					//sf::Image newImage(sf::Vector2u(width, height), outputImageArray.data());
 
-					photoTexture.loadFromImage(newImage);
+					photoTexture.loadFromImage(imgData);
 
 					photoCanvas.resize(photoTexture.getSize());
 					photoCanvas.clear(sf::Color::Transparent);
@@ -287,6 +323,8 @@ int main()
 
 					float zoomFactor = std::max(imgSize.x / winSize.x, imgSize.y / winSize.y);
 					photoView.setSize(winSize* zoomFactor);
+
+					//applyWarp();
 				}
 			}
 
