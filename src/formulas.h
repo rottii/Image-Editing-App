@@ -984,7 +984,7 @@ int getNextNeighbor(const std::vector<int>& img, int width, int height, int cx, 
     return -1; // Isolated pixel
 }
 
-std::vector<std::vector<std::pair<int, int>>> suzukiFindContours(const std::vector<uchar>& edgeImageRGBA, int width, int height) {
+std::vector<std::vector<std::pair<int, int>>> findContours(const std::vector<uchar>& edgeImageRGBA, int width, int height) {
 
     // 1. Convert the RGBA Canny edge output to a 1-channel integer working grid.
     // Background = 0, Unvisited Edge = 1.
@@ -1099,10 +1099,7 @@ double calculateShoelaceArea(const std::vector<std::pair<int, int>>& contour) {
     return std::abs(area) / 2.0;
 }
 
-void processBiggestContour(
-    const std::vector<std::vector<std::pair<int, int>>>& contours,
-    std::vector<uchar>& finalOutputImage,
-    int width, int height)
+void processBiggestContour( const std::vector<std::vector<std::pair<int, int>>>& contours, std::vector<uchar>& finalOutputImage, int width, int height)
 {
     int biggestContourIndex = -1;
     double maxArea = -1.0;
@@ -1207,7 +1204,7 @@ void ramerDouglasPeucker(const std::vector<std::pair<int, int>>& pointList, doub
     }
 }
 
-// 3. Wrapper for closed contours (Suzuki outputs closed loops)
+// 3. Wrapper for closed contours
 std::vector<std::pair<int, int>> approximateClosedPolygon(const std::vector<std::pair<int, int>>& contour, double epsilon) {
     if (contour.size() < 3) return contour;
 
@@ -1254,7 +1251,7 @@ std::vector<std::pair<int, int>> getFourCorners(const std::vector<std::pair<int,
         std::vector<std::pair<int, int>> approx = approximateClosedPolygon(contour, epsilon);
 
         if (approx.size() == 4) {
-            return approx; // Success! We found exactly a quad.
+            return approx; 
         }
         else if (approx.size() > 4) {
             minEpsilon = epsilon; // Too many points -> We need a stronger simplification -> Increase Epsilon
@@ -1271,13 +1268,13 @@ std::vector<std::pair<int, int>> getFourCorners(const std::vector<std::pair<int,
     return bestApprox;
 }
 
-void findSomething(const uchar* inputImage, std::vector<uchar>& outputImage, int inputWidth, int inputHeight, std::vector<sf::Vector2f>& cornerPoints)
+void findFourCorners(const uchar* inputImage, std::vector<uchar>& outputImage, int inputWidth, int inputHeight, std::vector<sf::Vector2f>& cornerPoints)
 {
     findEdges(inputImage, outputImage, inputWidth, inputHeight);
 
     closeEdgeGaps(outputImage, inputWidth, inputHeight, 2);
 
-    std::vector<std::vector<std::pair<int, int>>> contours = suzukiFindContours(outputImage, inputWidth, inputHeight);
+    std::vector<std::vector<std::pair<int, int>>> contours = findContours(outputImage, inputWidth, inputHeight);
 
     processBiggestContour(contours, outputImage, inputWidth, inputHeight);
 
@@ -1292,23 +1289,13 @@ void findSomething(const uchar* inputImage, std::vector<uchar>& outputImage, int
         }
     }
 
-    // Prepare a clean black image for our final visualization output
-    //outputImage.assign(inputWidth * inputHeight * 4, 0);
-
-    // If we didn't find any valid object, stop here
     if (biggestContourIndex == -1) {
         std::cout << "No object found in image.\n";
         return;
     }
 
-    // -------------------------------------------------------------------------
-    // STEP 5: Run Polygon Approximation (RDP) to simplify down to 4 corners
-    // -------------------------------------------------------------------------
     std::vector<std::pair<int, int>> fourCorners = getFourCorners(contours[biggestContourIndex]);
 
-    // -------------------------------------------------------------------------
-    // STEP 6: PLACE THE CORNER WHITENING CODE HERE
-    // -------------------------------------------------------------------------
     if (fourCorners.size() == 4) {
         for (int i = 0; i < 4; i++) {
             int x = fourCorners[i].first;
@@ -1316,7 +1303,8 @@ void findSomething(const uchar* inputImage, std::vector<uchar>& outputImage, int
             cornerPoints[i].x = x;
             cornerPoints[i].y = y;
 
-
+            //show the points on the output image
+            /*
             // Safe boundary check to prevent crashes near edges
             if (x >= 0 && x < inputWidth && y >= 0 && y < inputHeight) {
 
@@ -1341,7 +1329,7 @@ void findSomething(const uchar* inputImage, std::vector<uchar>& outputImage, int
                     }
                 }
                 
-            }
+            }*/
         }
     }
 }
