@@ -1,12 +1,48 @@
 #include <SFML/Graphics.hpp>
 #include <vector>
 #include <optional>
+#include <string>
+#include <iomanip>
+#include <sstream>
 #include "portable-file-dialogs.h"
 #include "events.hpp"//useless now
 #include "configuration.hpp"
 #include "shape.hpp"
 #include "formulas.h"
 
+struct CoordinateInput {
+	sf::FloatRect bounds;
+	std::string textString;
+	bool isFocused = false;
+	int pointIndex; // Hangi köþe noktasýna ait (0-3)
+	bool isX;       // true ise X, false ise Y koordinatý
+	size_t cursorPos = 0;
+	sf::Clock cursorTimer;
+
+	// Nokta sürüklendiðinde metni günceller
+	void updateTextFromPoint(const std::vector<sf::Vector2f>& cropPoints) {
+		if (!isFocused) {
+			float val = isX ? cropPoints[pointIndex].x : cropPoints[pointIndex].y;
+			std::stringstream stream;
+			stream << std::fixed << std::setprecision(1) << val;
+			textString = stream.str();
+			cursorPos = textString.length();
+		}
+	}
+
+	// Metin girilip enter'a basýldýðýnda/odak kaybedildiðinde noktayý günceller
+	void applyToPoint(std::vector<sf::Vector2f>& cropPoints) {
+		if (textString.empty()) return;
+		try {
+			float val = std::stof(textString);
+			if (isX) cropPoints[pointIndex].x = val;
+			else     cropPoints[pointIndex].y = val;
+		}
+		catch (...) {
+			//Geçersiz bir metin girilirse görmezden gel
+		}
+	}
+};
 
 //Adds circle points inside a pre-allocated vertex array
 void generateCircle(sf::VertexArray& vertex_array, sf::Vector2f position, float radius, uint32_t quality, sf::Color color)
@@ -65,7 +101,6 @@ float lerp(float current, float target, float speed) {
 	return current + (target - current) * speed;
 }
 
-// Ýki renk arasýnda yumuþak geçiþ yapar
 sf::Color lerpColor(sf::Color current, sf::Color target, float speed) {
 	return sf::Color(
 		static_cast<uint8_t>(lerp(current.r, target.r, speed)),
@@ -219,6 +254,25 @@ int main()
 	animatedCornersBtn.vertices.setPrimitiveType(sf::PrimitiveType::TriangleFan);
 	animatedCornersBtn.vertices.resize(quality);
 	#pragma endregion
+
+	// --- SAÐ PANEL VE GÝRDÝ KUTULARI HAZIRLIÐI ---
+	float panelWidth = 280.f;
+	float startX = conf::window_size.x - panelWidth + 20.f;
+	float startY = 80.f;
+
+	std::vector<CoordinateInput> coordInputs(8); // 4 Nokta * 2 Koordinat (X,Y)
+	for (int i = 0; i < 4; ++i) {
+		// X Kutusu
+		coordInputs[i * 2].bounds = sf::FloatRect({ startX, startY + i * 90.f + 30.f }, { 100.f, 30.f });
+		coordInputs[i * 2].pointIndex = i;
+		coordInputs[i * 2].isX = true;
+
+		// Y Kutusu
+		coordInputs[i * 2 + 1].bounds = sf::FloatRect({ startX + 120.f, startY + i * 90.f + 30.f }, { 100.f, 30.f });
+		coordInputs[i * 2 + 1].pointIndex = i;
+		coordInputs[i * 2 + 1].isX = false;
+	}
+
 	// --- KIRPMA / PENCERE ARACI DEÐÝÞKENLERÝ ---
 	std::vector<sf::Vector2f> cropPoints = {
 		{100.f, 100.f}, // Sol Üst
@@ -322,100 +376,142 @@ int main()
 			// KEY PRESS EVENT 
 			if (const auto* keyPressed = event->getIf<sf::Event::KeyPressed>())
 			{
-				if (keyPressed->code == sf::Keyboard::Key::Escape)
-					window.close();
+				bool isAnyInputFocused = false;
 
-				if (keyPressed->code == sf::Keyboard::Key::Left && canvasSprite.has_value())
-				{
-					photoView.rotate(sf::degrees(90.f));
-					draggedPointIndex = -1;
+				// Önce herhangi bir kutucuðun aktif olup olmadýðýna ve tuþ hareketlerine bakalým
+				for (auto& input : coordInputs) {
+					if (input.isFocused) {
+						isAnyInputFocused = true;
+
+						if (keyPressed->code == sf::Keyboard::Key::Left) {
+							if (input.cursorPos > 0) input.cursorPos--;
+							input.cursorTimer.restart();
+						}
+						else if (keyPressed->code == sf::Keyboard::Key::Right) {
+							if (input.cursorPos < input.textString.length()) input.cursorPos++;
+							input.cursorTimer.restart();
+						}
+						else if (keyPressed->code == sf::Keyboard::Key::Delete) { // Saðdaki karakteri sil (Delete tuþu)
+							if (input.cursorPos < input.textString.length()) {
+								input.textString.erase(input.cursorPos, 1);
+							}
+						}
+						else if (keyPressed->code == sf::Keyboard::Key::Enter) {
+							input.applyToPoint(cropPoints);
+							input.isFocused = false;
+						}
+					}
 				}
 
-				if (keyPressed->code == sf::Keyboard::Key::Right && canvasSprite.has_value())
+				if (!isAnyInputFocused)
 				{
-					photoView.rotate(sf::degrees(-90.f));
-					draggedPointIndex = -1;
-				}
+					if (keyPressed->code == sf::Keyboard::Key::Escape)
+						window.close();
 
-				if (keyPressed->code == sf::Keyboard::Key::F)
-				{
-					//Center the image on the window
-					sf::Vector2f winSize(window.getSize().x, window.getSize().y);
-					sf::Vector2f imgSize(photoTexture.getSize().x, photoTexture.getSize().y);
-
-					photoView.setCenter({ imgSize.x / 2.f, imgSize.y / 2.f });
-
-					float zoomFactor = std::max(imgSize.x / winSize.x, imgSize.y / winSize.y);
-					photoView.setSize(winSize * zoomFactor);
-				}
-
-				if (keyPressed->code == sf::Keyboard::Key::Space && canvasSprite.has_value())
-				{
-					applyWarp();
-				}
-
-				if (keyPressed->code == sf::Keyboard::Key::Enter && canvasSprite.has_value())
-				{
-					int width = photoTexture.getSize().x;
-					int height = photoTexture.getSize().y;
-
-					sf::Image imgData = photoCanvas.getTexture().copyToImage();
-					const uint8_t* inputImageArray = imgData.getPixelsPtr();
-					std::vector<uint8_t> outputImageArray;
-
-					findFourCorners(inputImageArray, outputImageArray, width, height, cropPoints);
-
-					sf::Image newImage(sf::Vector2u(width, height), outputImageArray.data());
-
-					photoTexture.loadFromImage(imgData);
-
-					photoCanvas.resize(photoTexture.getSize());
-					photoCanvas.clear(sf::Color::Transparent);
-
-					sf::Sprite newRawSprite(photoTexture);
-					photoCanvas.draw(newRawSprite);
-					photoCanvas.display();
-
-					canvasSprite.emplace(photoCanvas.getTexture());
-
-					//Center the image on the window
-					sf::Vector2f winSize(window.getSize().x, window.getSize().y);
-					sf::Vector2f imgSize(photoTexture.getSize().x, photoTexture.getSize().y);
-
-					photoView.setCenter({ imgSize.x / 2.f, imgSize.y / 2.f });
-
-					float zoomFactor = std::max(imgSize.x / winSize.x, imgSize.y / winSize.y);
-					photoView.setSize(winSize* zoomFactor);
-
-					//applyWarp();
-				}
-
-				if (keyPressed->code == sf::Keyboard::Key::S && keyPressed->control && canvasSprite.has_value())
-				{
-
-					auto destination = pfd::save_file("Save Image As", ".",
-						{ "Image Files", "*.png *.jpg *.jpeg *.bmp" }).result();
-
-					if (!destination.empty())
+					if (keyPressed->code == sf::Keyboard::Key::Left && canvasSprite.has_value())
 					{
-						std::filesystem::path savePath = std::filesystem::u8path(destination);
+						photoView.rotate(sf::degrees(90.f));
+						draggedPointIndex = -1;
+					}
 
-						//Force an extension if the user didn't type one
-						if (!savePath.has_extension())
-						{
-							savePath.replace_extension(".png"); // Default to PNG format
+					if (keyPressed->code == sf::Keyboard::Key::Right && canvasSprite.has_value())
+					{
+						photoView.rotate(sf::degrees(-90.f));
+						draggedPointIndex = -1;
+					}
+
+					if (keyPressed->code == sf::Keyboard::Key::F)
+					{
+						//Center the image on the window
+						sf::Vector2f winSize(window.getSize().x, window.getSize().y);
+						sf::Vector2f imgSize(photoTexture.getSize().x, photoTexture.getSize().y);
+
+						photoView.setCenter({ imgSize.x / 2.f, imgSize.y / 2.f });
+
+						float zoomFactor = std::max(imgSize.x / winSize.x, imgSize.y / winSize.y);
+						photoView.setSize(winSize * zoomFactor);
+					}
+
+					if (keyPressed->code == sf::Keyboard::Key::Space && canvasSprite.has_value())
+					{
+						applyWarp();
+					}
+
+					if (keyPressed->code == sf::Keyboard::Key::Enter && canvasSprite.has_value())
+					{
+						bool focusCleared = false;
+						for (auto& input : coordInputs) {
+							if (input.isFocused) {
+								input.applyToPoint(cropPoints);
+								input.isFocused = false; // Enter'a basýnca odaðý kaldýr
+								focusCleared = true;
+							}
 						}
 
-						//Pull pixels from GPU and save
-						sf::Image finalImage = photoCanvas.getTexture().copyToImage();
+						if (!focusCleared && canvasSprite.has_value())
+						{
+							int width = photoTexture.getSize().x;
+							int height = photoTexture.getSize().y;
 
-						if (finalImage.saveToFile(savePath))
-						{
-							printf("Saved successfully to: %s\n", savePath.string().c_str());
+							sf::Image imgData = photoCanvas.getTexture().copyToImage();
+							const uint8_t* inputImageArray = imgData.getPixelsPtr();
+							std::vector<uint8_t> outputImageArray;
+
+							findFourCorners(inputImageArray, outputImageArray, width, height, cropPoints);
+
+							sf::Image newImage(sf::Vector2u(width, height), outputImageArray.data());
+
+							photoTexture.loadFromImage(imgData);
+
+							photoCanvas.resize(photoTexture.getSize());
+							photoCanvas.clear(sf::Color::Transparent);
+
+							sf::Sprite newRawSprite(photoTexture);
+							photoCanvas.draw(newRawSprite);
+							photoCanvas.display();
+
+							canvasSprite.emplace(photoCanvas.getTexture());
+
+							//Center the image on the window
+							sf::Vector2f winSize(window.getSize().x, window.getSize().y);
+							sf::Vector2f imgSize(photoTexture.getSize().x, photoTexture.getSize().y);
+
+							photoView.setCenter({ imgSize.x / 2.f, imgSize.y / 2.f });
+
+							float zoomFactor = std::max(imgSize.x / winSize.x, imgSize.y / winSize.y);
+							photoView.setSize(winSize * zoomFactor);
+
+							//applyWarp();
 						}
-						else
+					}
+
+					if (keyPressed->code == sf::Keyboard::Key::S && keyPressed->control && canvasSprite.has_value())
+					{
+
+						auto destination = pfd::save_file("Save Image As", ".",
+							{ "Image Files", "*.png *.jpg *.jpeg *.bmp" }).result();
+
+						if (!destination.empty())
 						{
-							printf("SFML failed to save the image.\n");
+							std::filesystem::path savePath = std::filesystem::u8path(destination);
+
+							//Force an extension if the user didn't type one
+							if (!savePath.has_extension())
+							{
+								savePath.replace_extension(".png"); // Default to PNG format
+							}
+
+							//Pull pixels from GPU and save
+							sf::Image finalImage = photoCanvas.getTexture().copyToImage();
+
+							if (finalImage.saveToFile(savePath))
+							{
+								printf("Saved successfully to: %s\n", savePath.string().c_str());
+							}
+							else
+							{
+								printf("SFML failed to save the image.\n");
+							}
 						}
 					}
 				}
@@ -455,19 +551,43 @@ int main()
 
 				if (mouseClick->button == sf::Mouse::Button::Left && canvasSprite.has_value())
 				{
-					sf::Vector2f worldPos = window.mapPixelToCoords(mouseClick->position, photoView);
+					sf::Vector2f mousePos(static_cast<float>(mouseClick->position.x), static_cast<float>(mouseClick->position.y));
 
-					float viewScale = photoView.getSize().x / window.getDefaultView().getSize().x;
-					float dynamicRadius = 4.f * viewScale;
+					// Önce Sað Paneldeki kutulara týklanýp týklanmadýðýný kontrol et
+					bool uiClicked = false;
+					if (mousePos.x > window.getSize().x - panelWidth) {
+						uiClicked = true; // Panele týklandý, fotoðraf iþlemleri yapýlmamalý
+					}
 
-					for (int i = 0; i < 4; ++i)
+					for (auto& input : coordInputs) {
+						if (input.bounds.contains(mousePos)) {
+							if (!input.isFocused) {
+								input.isFocused = true;
+								input.cursorPos = input.textString.length(); // Kutucuða týklanýnca imleç sona gitsin
+							}
+						}
+						else {
+							if (input.isFocused) {
+								input.applyToPoint(cropPoints);
+							}
+							input.isFocused = false;
+						}
+					}
+
+					if (!uiClicked && canvasSprite.has_value())
 					{
-						sf::FloatRect pointBounds({ cropPoints[i].x - dynamicRadius, cropPoints[i].y - dynamicRadius }, {dynamicRadius * 2, dynamicRadius * 2});
+						sf::Vector2f worldPos = window.mapPixelToCoords(mouseClick->position, photoView);
+						float viewScale = photoView.getSize().x / window.getDefaultView().getSize().x;
+						float dynamicRadius = 4.f * viewScale;
 
-						if (pointBounds.contains(worldPos))
+						for (int i = 0; i < 4; ++i)
 						{
-							draggedPointIndex = i; 
-							break;
+							sf::FloatRect pointBounds({ cropPoints[i].x - dynamicRadius, cropPoints[i].y - dynamicRadius }, { dynamicRadius * 2, dynamicRadius * 2 });
+							if (pointBounds.contains(worldPos))
+							{
+								draggedPointIndex = i;
+								break;
+							}
 						}
 					}
 				}
@@ -612,6 +732,30 @@ int main()
 					cropPoints[draggedPointIndex] = newWorldPos;
 				}
 			}
+
+			// TEXT ENTERED EVENT
+			if (const auto* textEvent = event->getIf<sf::Event::TextEntered>())
+			{
+				for (auto& input : coordInputs) {
+					if (input.isFocused) {
+						uint32_t unicode = textEvent->unicode;
+
+						// Backspace (Silme)
+						if (unicode == '\b' && input.cursorPos > 0) {
+							// Ýmlecin solundaki karakteri sil ve imleci 1 geri al
+							input.textString.erase(input.cursorPos - 1, 1);
+							input.cursorPos--;
+						}
+						// Sadece Rakamlar, Nokta ve Eksi Ýþaretine Ýzin Ver
+						else if ((unicode >= '0' && unicode <= '9') || unicode == '.' || unicode == '-') {
+							// Karakteri imlecin olduðu konuma ekle ve imleci 1 ileri al
+							input.textString.insert(input.cursorPos, 1, static_cast<char>(unicode));
+							input.cursorPos++;
+							input.cursorTimer.restart();
+						}
+					}
+				}
+			}
 		}
 
 		float dt = deltaClock.restart().asSeconds();
@@ -624,7 +768,7 @@ int main()
 		float animSpeed = 15.f * dt;
 
 		// --- 1. UPDATE MENU PROGRESS ---
-				// If no image is loaded, force progress to 1 so the Open button is fully visible!
+		// If no image is loaded, force progress to 1 so the Open button is fully visible!
 		float targetProgress = (isMenuOpen || !canvasSprite.has_value()) ? 1.f : 0.f;
 		menuAnimProgress = lerp(menuAnimProgress, targetProgress, animSpeed);
 
@@ -699,7 +843,7 @@ int main()
 			cornersBtnCurrentShrink = 0.f;
 		}
 
-		// --- MENU TOGGLE BUTTON SHAPE (Only generate if image is loaded) ---
+		// --- MENU TOGGLE BUTTON SHAPE ---
 		if (canvasSprite.has_value()) {
 			generateRoundedRectangle(
 				animatedMenuBtn.vertices,
@@ -710,8 +854,8 @@ int main()
 			menuBtnText.setPosition({ menuBtnBounds.position.x + 35.f, menuBtnBounds.position.y + 15.f });
 		}
 
-		// --- SUB-BUTTONS (Only generate if visible) ---
-		if (menuAnimProgress > 0.01f)
+		// --- SUB-BUTTONS ---
+		if (menuAnimProgress > 0.1f)
 		{
 			// Apply current alpha to colors
 			sf::Color currentOpenCol = applyAlpha(openBtnCurrentColor, menuAlpha);
@@ -758,9 +902,6 @@ int main()
 
 		// === RENDER LOOP ===
 		window.clear(sf::Color(40, 40, 40));
-
-		// --- LAYER 1: THE PHOTO (Zoomable) ---
-		// 1. Tell the window to look through the Photo Camera
 		window.setView(photoView);
 
 		// A. Draw the Photo Layer
@@ -807,9 +948,70 @@ int main()
 			window.draw(menuBtn.shadow);
 			window.draw(animatedMenuBtn.vertices);
 			window.draw(menuBtnText);
+
+			// --- SAÐ PANEL ÇÝZÝMÝ ---
+			sf::RectangleShape rightPanelRect({ panelWidth, static_cast<float>(window.getSize().y) });
+			rightPanelRect.setPosition({ window.getSize().x - panelWidth, 0.f });
+			rightPanelRect.setFillColor(sf::Color(30, 30, 30, 240)); // Yarý saydam koyu gri
+			window.draw(rightPanelRect);
+
+			sf::Text panelTitle(font, "Corner Coordinates", 24);
+			panelTitle.setFillColor(sf::Color::White);
+			panelTitle.setPosition({ startX, 20.f });
+			window.draw(panelTitle);
+
+			for (int i = 0; i < 8; ++i) {
+				auto& input = coordInputs[i];
+
+				// Eðer kutu aktif deðilse, noktanýn güncel pozisyonunu çek (Fareyle sürüklemeyi senkronize et)
+				if (!input.isFocused) {
+					input.updateTextFromPoint(cropPoints);
+				}
+
+				// Kutu Arkaplaný
+				sf::RectangleShape box(input.bounds.size);
+				box.setPosition(input.bounds.position);
+				box.setFillColor(input.isFocused ? sf::Color(80, 80, 80) : sf::Color(50, 50, 50));
+				box.setOutlineThickness(2.f);
+				box.setOutlineColor(input.isFocused ? sf::Color(0, 120, 215) : sf::Color(100, 100, 100));
+				window.draw(box);
+
+				// Kutunun Ýçindeki Metin
+				sf::Text inputText(font, input.textString, 18);
+				inputText.setFillColor(sf::Color::White);
+				inputText.setPosition({ input.bounds.position.x + 8.f, input.bounds.position.y + 3.f });
+				window.draw(inputText);
+
+				//ÝMLEC ÇÝZ
+				if (input.isFocused) {
+					// Ýmlecin anlýk olarak bulunmasý gereken (X, Y) piksel koordinatýný sf::Text'ten iste
+					sf::Vector2f cursorPixelPos = inputText.findCharacterPos(input.cursorPos);
+
+					sf::RectangleShape cursorLine({ 2.f, 18.f }); // 2 Piksel kalýnlýk, 18 piksel uzunluk
+					cursorLine.setPosition({ cursorPixelPos.x, cursorPixelPos.y + 2.f });
+					cursorLine.setFillColor(sf::Color::White);
+
+					if (input.cursorTimer.getElapsedTime().asMilliseconds() % 1000 < 500) {
+						window.draw(cursorLine);
+					}
+				}
+
+				// Baþlýklar (P1 X:, P1 Y: vb.)
+				if (input.isX) {
+					sf::Text label(font, "P" + std::to_string(input.pointIndex + 1) + " X:", 16);
+					label.setFillColor(sf::Color(200, 200, 200));
+					label.setPosition({ input.bounds.position.x, input.bounds.position.y - 25.f });
+					window.draw(label);
+				}
+				else {
+					sf::Text label(font, "Y:", 16);
+					label.setFillColor(sf::Color(200, 200, 200));
+					label.setPosition({ input.bounds.position.x, input.bounds.position.y - 25.f });
+					window.draw(label);
+				}
+			}
 		}
 
-		// Only draw the sub-buttons if the animation is visible
 		if (menuAnimProgress > 0.1f)
 		{
 			// We use a Transform to slide the static shadows down matching our offset
